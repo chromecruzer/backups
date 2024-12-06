@@ -485,3 +485,63 @@ export default class LoadXlsxData {
   }
 }
 
+
+
+///////////////////////////////////////////
+
+async readLargeCsv(csvPath: string): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      if (this.ns) {
+        this.ns.notify(
+          "INFO",
+          `reading IOL Report 📊 Please Wait... `,
+          `FROM ${csvPath} ✅`,
+          ["iolUpload"],
+        );
+      }
+
+      fs.createReadStream(csvPath)
+        .pipe(csv())
+        .on("data", (data) => {
+          // Helper function to parse dates safely
+          function parseDate(dateStr: string): string {
+            const parsedDate = new Date(dateStr);
+            return isNaN(parsedDate.getTime())
+              ? null
+              : parsedDate.toISOString();
+          }
+
+          // Construct a processed data row
+          const convertedData = [
+            data["W/H          "]?.trim() || null,
+            data["LOCN."]?.trim() || null,
+            data["NAME"]?.trim() || null,
+            data["ADDRESS/PHONE"]?.trim() || null,
+            data["ITEM"]?.trim() || null,
+            data["DESCRIPTION"]?.trim() || null,
+            data["LOT"]?.trim() || null,
+            data["QTY"] ? parseInt(data["QTY"], 10) : null,
+            data["PURCHASE ORDER"]?.trim() || null,
+            parseDate(data["RECD. DATE"]),
+            parseDate(data["EXP. DATE"]),
+            parseDate(data["SHIP DATE"]),
+          ];
+
+          // Check if the row is fully empty
+          const isEmptyRow = convertedData.every((field) => field === null);
+
+          // Push the row only if it's not empty
+          if (!isEmptyRow) {
+            this.bulkData.push(convertedData);
+          }
+        })
+        .on("end", () => {
+          console.log("Bulk Data:", this.bulkData); // Log bulkData if needed
+          resolve(this.bulkData);
+        })
+        .on("error", (err) => {
+          reject(new Error(`"${csvPath}" could not be read because ${err}`));
+        });
+    });
+  }
+
