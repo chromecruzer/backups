@@ -1,0 +1,15 @@
+node docker/create-pgdata --pw test123 --configdir --certdir  --reset --production
+node docker/create-uploads --production
+ node docker/create-configs --production
+ node docker/create-configs --certkeyfile
+node docker/create-configs --certfile  
+ node docker/create-configs --certdir   
+ node docker/create-configs --configdir  
+node docker/create-configs --smtpport   
+ node docker/create-configs --smtphost   
+ node docker/create-configs --apihost   
+ node docker/create-configs --tpw  
+node docker/create-configs --pw  
+ node docker/create-configs --help   
+ node docker/create-test-certs --certdir 
+node docker/clean-docker-development.js -- remove all of the volumes 

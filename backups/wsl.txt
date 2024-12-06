@@ -1,0 +1,108 @@
+To check if **Ubuntu** (or any other Linux distribution) is successfully installed and running under **WSL (Windows Subsystem for Linux)**, follow these steps:
+
+### 1. **Check Installed Distributions**
+First, you need to confirm that **Ubuntu** is installed and available on your system.
+
+1. **Open PowerShell or Command Prompt** as **Administrator**.
+2. Run the following command to list all installed WSL distributions:
+
+   ```powershell
+   wsl --list --verbose
+   ```
+
+   This will show you all the distributions you have installed along with their **version** (WSL 1 or WSL 2) and their current status (whether they are running or stopped).
+
+   Example output:
+
+   ```
+   NAME            STATE           VERSION
+   * Ubuntu-20.04   Running         2
+   ```
+
+   If **Ubuntu** is listed and its **state** is **Running** or **Stopped**, it is successfully installed. If it's not listed, the installation may not have completed successfully.
+
+### 2. **Check if Ubuntu is Running**
+If you want to check if **Ubuntu** is running, you can do one of the following:
+
+- **Check Running Distributions**:
+  Run the following command to list only the distributions that are currently running:
+
+  ```powershell
+  wsl --list --running
+  ```
+
+  If **Ubuntu** is listed here, it's actively running. If it isn't listed, it may be stopped.
+
+- **Check Using the Task Manager**:
+  You can also check if Ubuntu is running by checking the processes in the **Task Manager**:
+  - Press `Ctrl + Shift + Esc` to open **Task Manager**.
+  - Look under the **Processes** tab for a process named something like `vmmem` or `wslhost`, which indicates that a WSL instance is running.
+
+### 3. **Start Ubuntu (if it’s not running)**
+If **Ubuntu** is not running, you can start it by simply opening it from the **Start Menu** or by running the following command in PowerShell:
+
+```powershell
+wsl -d Ubuntu
+```
+
+This will launch the default shell for Ubuntu in your WSL environment. If **Ubuntu** is correctly installed, you should see a Linux terminal prompt.
+
+### 4. **Check the Version of Ubuntu Running**
+If Ubuntu is installed and running, you can check the exact version of the Ubuntu distribution you're using by running the following command inside the Ubuntu terminal:
+
+```bash
+lsb_release -a
+```
+
+This will show you details about the Ubuntu version, such as the release number and codename (e.g., Ubuntu 20.04, Ubuntu 22.04, etc.).
+
+### 5. **Check WSL Version (Optional)**
+To check if you are using **WSL 1** or **WSL 2** (the default is WSL 2), you can run:
+
+```powershell
+wsl --list --verbose
+```
+
+This will display the **version** of each installed distribution (either 1 or 2).
+
+For example:
+```
+NAME            STATE           VERSION
+* Ubuntu-20.04   Running         2
+```
+
+If the **version** is **2**, that means you're running WSL 2, which is recommended for better performance and support for running Linux GUI apps.
+
+### 6. **Confirm Ubuntu Installation via Shell**
+You can also run the following in PowerShell to confirm the installation:
+
+```powershell
+wsl -d Ubuntu -- bash -c "echo 'Ubuntu is running!'"
+```
+
+If you see the output `Ubuntu is running!`, then Ubuntu is successfully installed and running.
+
+---
+
+### Summary of Commands:
+- **List all distributions** (installed and their state):  
+  ```powershell
+  wsl --list --verbose
+  ```
+
+- **List only running distributions**:  
+  ```powershell
+  wsl --list --running
+  ```
+
+- **Start Ubuntu**:  
+  ```powershell
+  wsl -d Ubuntu
+  ```
+
+- **Check Ubuntu version** (inside Ubuntu terminal):  
+  ```bash
+  lsb_release -a
+  ```
+
+Let me know if Ubuntu is installed and running or if you encounter any issues!

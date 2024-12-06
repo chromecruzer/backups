@@ -1,0 +1,1 @@
+nx run tedioustest:run-script --customers="Customers.xlsx" --products="Products.xlsx" --mappings="SalesMappings.xlsx" --salesreps="SalesReps.xlsx"

@@ -1,0 +1,107 @@
+EO2 Cypress Unit Testing Kit 
+
+To run Cypress tests, you need to ensure that the necessary dependencies are installed first. Since you're inside the `EyeOrderCore.UiTests` folder, you can follow these steps:
+
+### Step 1: Install Dependencies (if not already done)
+Ensure you have all the dependencies installed, including Cypress. Since you have a `package.json` file and a `yarn.lock` file, it suggests you're using **Yarn** as your package manager. Run the following command to install all required dependencies:
+
+```bash
+yarn install
+```
+
+This will install all dependencies defined in your `package.json` and `yarn.lock`.
+
+### Step 2: Run Cypress Tests
+Once the dependencies are installed, you can run Cypress using the following command:
+
+```bash
+yarn cypress open
+```
+
+This will open the Cypress Test Runner in interactive mode where you can select and run tests manually.
+
+Alternatively, you can run Cypress in headless mode (without opening the Test Runner) by using this command:
+
+```bash
+yarn cypress run
+```
+
+### Step 3: Check Cypress Configuration (optional)
+If you want to make sure Cypress is properly configured, you can check the `cypress.json` file in your project directory. This file contains configurations like the base URL, viewport size, and other settings related to running Cypress tests.
+
+Let me know if you need any more help!
+
+
+
+
+
+
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Yes, that's basically it! Once you've run the `yarn install` to install dependencies, running Cypress tests can be as simple as using:
+
+- `yarn cypress open` to launch the Cypress Test Runner in interactive mode.
+- `yarn cypress run` to run all the tests in headless mode (ideal for CI/CD environments).
+
+However, here are a few additional tips in case you need more details:
+
+### Additional Tips:
+
+1. **Verify Cypress Installation**:
+   If you're unsure whether Cypress was installed properly, you can check by running:
+   ```bash
+   yarn cypress --version
+   ```
+   This will show the installed version of Cypress.
+
+2. **Run Specific Tests**:
+   If you want to run a specific test or set of tests, you can use the `--spec` option like so:
+   ```bash
+   yarn cypress run --spec 'cypress/integration/path/to/test.spec.js'
+   ```
+   Replace `'cypress/integration/path/to/test.spec.js'` with the actual path to your test file.
+
+3. **Running with Environment Variables**:
+   You can pass environment variables when running Cypress tests. For example:
+   ```bash
+   yarn cypress run --env configFile=staging
+   ```
+   You can define and use custom environment variables within your test scripts.
+
+4. **Running Tests with Browsers**:
+   By default, Cypress runs in Electron browser. However, you can specify a different browser like Chrome:
+   ```bash
+   yarn cypress run --browser chrome
+   ```
+   Or to see a list of supported browsers:
+   ```bash
+   yarn cypress open
+   ```
+   This will show a GUI that lets you select the browser to use.
+
+5. **Debugging**:
+   Cypress provides powerful debugging features. You can use `debug` logs to track down issues during test execution. You can also run Cypress in "headed" mode (interactive mode) to see exactly what's happening during your test runs.
+
+---
+
+If you have any specific issues or errors when running the tests, let me know and I can help you troubleshoot. Otherwise, you're all set to go!

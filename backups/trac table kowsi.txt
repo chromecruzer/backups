@@ -1,0 +1,6 @@
+1. Create RECORD & RECORD_MAPPING for the the file u want to populate for db-reset in ./LIBS . Note: Don't forget to add the matchfeilds correctly.
+2. Create the Mappings Datatypes for type of file and its data in the ./LIBS/DATATYPES make sure u give the name as same as the RECORD Fn().
+3. Now go to LIBS/PSQL/Postgres.ts and give the match feilds correct which is imported from the Datatypes table-name.
+4. Finally go to DB-RESET/src/Main.ts and add Your file match fn()s of psql and Mappings of Data-table-name give proper error handlings and console logs 
+   to ensure the excel is loaded correctly from the assets folder of DB-RESET.  Note: Don't forget to add the excel file in the assets folder.
+5. Now the cmd nx run db-reset:run-script ......Check Your Excel is Loaded. If 'yes' There you go u had now successfully created a table in trachschema.

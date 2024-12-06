@@ -1,0 +1,76 @@
+npx nx run tedioustest:run-script --configdir D:\TRAC\Org\config --customers D:\TRAC\Org\config\Customers.xlsx 
+npx nx run tedioustest:run-script --configdir D:\TRAC\Org\config --salesreps D:\TRAC\Org\config\SalesReps.xlsx
+npx nx run tedioustest:run-script --configdir D:\TRAC\Org\config --products D:\TRAC\Org\config\Products.xlsx
+npx nx run tedioustest:run-script --configdir D:\TRAC\Org\config --mappings D:\TRAC\Org\config\SalesMapping.xlsx
+//
+
+
+
+In SQL Server, there isn't a fixed **default database** for the `sa` user account — it depends on the setup and how SQL Server is configured. 
+
+However, if you're using SQL Server with Docker (or in general), the `sa` user typically doesn't have a default database explicitly set, so it may default to `master`, which is the system database for SQL Server.
+
+### Possible Solutions:
+
+1. **Try using `master` as the database**:
+   If you're unsure which database to use, try connecting to the `master` database, which is always available in SQL Server:
+
+   Update your connection string to:
+
+   ```json
+   "database": "master",
+   ```
+
+2. **Check if the database `TableauModelData_Surgical` exists**:
+   If your application is expecting a specific database (like `TableauModelData_Surgical`), ensure that the database exists in the SQL Server instance you're connecting to. You can verify this by running the following SQL command inside SQL Server to list all databases:
+
+   ```sql
+   SELECT name FROM sys.databases;
+   ```
+
+   If `TableauModelData_Surgical` doesn't exist, you'll need to create it or connect to the correct database.
+
+3. **Create the missing database if needed**:
+   If the database you're trying to connect to doesn't exist and you want to create it, you can do so via SQL Server Management Studio (SSMS) or by running the following SQL in your `master` database (or another existing database):
+
+   ```sql
+   CREATE DATABASE TableauModelData_Surgical;
+   ```
+
+4. **Set a default database for `sa` (optional)**:
+   If you always want the `sa` user to connect to a specific database by default (like `TableauModelData_Surgical`), you can set the default database for the `sa` user in SQL Server:
+
+   ```sql
+   ALTER LOGIN sa WITH DEFAULT_DATABASE = TableauModelData_Surgical;
+   ```
+
+### Summary:
+- **Default database for `sa`**: If no default database is set, SQL Server will use `master` by default.
+- If you have a database like `TableauModelData_Surgical` that your application depends on, make sure it exists and that you're specifying the correct database name in your connection string.
+
+You can test the connection with the `master` database to see if it works and then troubleshoot from there.
+
+Let me know if this helps or if you need further assistance!
+
+
+//
+
+docker stop mssql-container
+docker rm mssql-container
+docker run -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=NewPassword123 -p 1433:1433 --name mssql-container -d mcr.microsoft.com/mssql/server:2022-latest
+
+
+
+
+/////////////////
+
+{
+"user": "sa",
+"password": "Password123",
+"server": "localhost",
+"database": "master",
+"productsTable": "dbo.PS_Prod_Master",
+"customersTable": "dbo.Customer_Master_Unique",
+"mappingsTable": "dbo.Customer_Sales_Rep_Alignment",
+"salesRepsTable": "dbo.Dim_SalesRep"
+}

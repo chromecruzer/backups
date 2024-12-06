@@ -1,0 +1,285 @@
+import * as fs from "fs-extra";
+import * as xlsx from "xlsx";
+import util from "util";
+import _ from "lodash";
+import { InputToSqlMapping } from "../../datatypes/src";
+import { NotificationsServer } from "./index";
+
+const dump = (obj, depth = null) => util.inspect(obj, { depth, colors: true });
+
+const checkLength = (datum, mapping, cell) => {
+  const regex = /char\((\d+)\)/;
+  const sqlLength = parseInt(
+    regex.test(mapping.sqlType) ? regex.exec(mapping.sqlType)[1] : "0",
+  );
+  switch (true) {
+    case sqlLength === 0:
+      return;
+    case !_.isString(datum):
+      console.error(
+        `datum '${datum}' does not have a value ${dump(cell)} for mapping ${
+          dump(mapping)
+        }`,
+      );
+      return;
+    case sqlLength < datum.length:
+      console.error(
+        `datum '${datum}' length ${datum.length} won't fit in sql ${
+          dump(mapping)
+        }`,
+      );
+      return;
+    default:
+  }
+};
+
+export default class LoadXlsxData {
+  fs = fs;
+  xlsx = xlsx;
+  public bulkData: (string | number | Date)[][] = [];
+  public lotNumbers: string[] = [];
+  headers: string[] = [];
+
+  constructor(protected ns = null as (NotificationsServer | null)) {}
+
+  async scanForLotNumbers(xlsxPath: string) {
+    console.log(`called with ${xlsxPath}`);
+    this.bulkData = [];
+    const newLotNumbers = [];
+    const sheet = await this.readFirstSheet(xlsxPath);
+    let emptyRowCounter = 0;
+    let row = 1;
+
+    while (emptyRowCounter < 8) {
+      const lotNumber = this.findLotNumber(row, sheet);
+      if (_.isString(lotNumber)) {
+        newLotNumbers.push(lotNumber);
+        emptyRowCounter = 0;
+      } else {
+        emptyRowCounter += 1;
+      }
+      row++;
+    }
+    console.log(
+      `scanForLotNumbers found original ${newLotNumbers.length} records versus ${
+        _.uniq(newLotNumbers).length
+      } unique records`,
+    );
+    this.lotNumbers = newLotNumbers;
+  }
+
+  private findLotNumber(row, sheet) {
+    const cellAddress = `A${row}`;
+    const cell = sheet[cellAddress];
+    if (cell) {
+      switch (cell.t) {
+        case "n":
+          return _.toString(cell.w);
+        case "s":
+          if (!_.isEmpty(cell.w)) {
+            return cell.w;
+          }
+          break;
+        default:
+      }
+    }
+    return null;
+  }
+
+  async readWithMap(xlsxPath: string, mapping: InputToSqlMapping[]) {
+    const firstSheet = await this.readFirstSheet(xlsxPath); // Read first sheet (chunked)
+    let emptyRow = false;
+    this.loadHeaders(firstSheet);
+    let row = 2; // Start from row 2, because row 1 is the header row
+
+    // Array to store all data rows
+    let allDataRows: (Date | string | number)[][] = [];
+
+    // Iterate through all chunks and process them
+    while (!emptyRow) {
+      const dataRow: (Date | string | number)[] = [];
+      emptyRow = true;
+
+      // Iterate through the mapping for each column
+      mapping.forEach((c) => {
+        const cellAddress = `${c.xlsxAddress}${row}`;
+        let datum: Date | string | number = null;
+
+        if (firstSheet[cellAddress] !== undefined) {
+          const cellValue = firstSheet[cellAddress].w ||
+            firstSheet[cellAddress].v;
+          emptyRow = false;
+
+          // Determine the data type and convert accordingly
+          switch (c.dataType) {
+            case "date":
+              datum = new Date(cellValue);
+              break;
+            case "number":
+              datum = parseInt(cellValue);
+              break;
+            case "string":
+              datum = cellValue;
+              checkLength(datum, c, firstSheet[cellAddress]); // Check if the length fits SQL column
+              break;
+            default:
+              datum = cellValue;
+          }
+        }
+        dataRow.push(datum);
+      });
+
+      // If data row is not empty, add it to bulk data
+      if (!emptyRow) {
+        allDataRows.push(dataRow);
+        row++;
+      }
+    }
+
+    // After all chunks have been processed and data is gathered, push it to bulkData
+    this.bulkData = allDataRows;
+
+    // Log final data count or any other required operation
+    console.table([{
+      " 📊 Total Rows Processed": this.bulkData.length,
+    }]);
+
+    // Return the processed data (or handle it as needed)
+    return this.bulkData;
+  }
+
+  private loadHeaders(firstSheet) {
+    let col = 0;
+    let header;
+    do {
+      header = null;
+      const cellAddress = xlsx.utils.encode_cell({ r: 0, c: col });
+      if (_.isObject(firstSheet[cellAddress])) {
+        header = firstSheet[cellAddress].w;
+        this.headers.push(header);
+      }
+      col += 1;
+    } while (header);
+  }
+
+  private async readFirstSheet(xlsxPath: string) {
+    if (this.ns) {
+      this.ns.notify("INFO", `reading IOL Report`, `reading from ${xlsxPath}`, [
+        "iolUpload",
+      ]);
+    }
+    console.info(`reading from ${xlsxPath}`);
+
+    const fs = this.fs;
+    const XLSX = this.xlsx;
+
+    const logMemoryUsage = () => {
+      const memoryUsage = process.memoryUsage();
+      console.info("Memory Usage:", {
+        rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
+        heapTotal: `${(memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
+        heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`,
+        external: `${(memoryUsage.external / 1024 / 1024).toFixed(2)} MB`,
+      });
+    };
+
+    let totalRowCount = 0; // Variable to accumulate row counts
+
+    return new Promise((resolve, reject) => {
+      const highWaterMarkSize = 1024 * 1024 * 100; // 100 MB for highWaterMark
+
+      const stream = fs.createReadStream(xlsxPath, {
+        highWaterMark: highWaterMarkSize,
+      });
+
+      let totalSize = 0;
+      let chunks: Buffer[] = []; // to accumulate all chunks
+      let chunkCount = 0; // counter to track the number of chunks
+
+      console.info(`Starting to read file stream from: ${xlsxPath}`);
+
+      logMemoryUsage();
+
+      stream.on("data", (chunk: Buffer) => {
+        totalSize += chunk.length;
+        chunkCount += 1; // increment chunk count
+
+        console.info(
+          `Read chunk ${chunkCount}: ${chunk.length} bytes, total read so far: ${totalSize} bytes`,
+        );
+
+        logMemoryUsage();
+
+        // Push the chunk to the array instead of processing immediately
+        chunks.push(chunk);
+      });
+
+      stream.on("end", async () => {
+        try {
+          console.info(
+            `File stream reading complete. Total size: ${totalSize} bytes`,
+          );
+          logMemoryUsage();
+
+          // Once the stream is done, process all accumulated chunks
+          const sheetDataPromises = chunks.map((chunk) =>
+            processChunk(chunk, XLSX)
+          );
+
+          // Wait for all chunks to be processed before resolving
+          const allSheetData = await Promise.all(sheetDataPromises);
+
+          // Merge the sheet data (or handle it according to your needs)
+          const finalSheetData = allSheetData[0]; // assuming you only need the first sheet
+
+          // Calculate row count for each chunk and accumulate the total
+          allSheetData.forEach((sheetData) => {
+            totalRowCount += this.countRows(sheetData);
+          });
+
+          console.table([{
+            " 📊 Total Rows In Uploaded IOL EXCEL FILE": totalRowCount,
+          }]); // COUNT ASKED BY CHARLES SIR
+
+          resolve(finalSheetData); // Resolve the final sheet data
+        } catch (err) {
+          reject(new Error(`Error processing chunks: ${err.message}`));
+        }
+      });
+
+      stream.on("error", (err: Error) => {
+        console.error(`Error reading file stream: ${err.message}`);
+        reject(
+          new Error(`"${xlsxPath}" could not be read because ${err.message}`),
+        );
+      });
+
+      stream.on("close", () => {
+        console.info(`File stream closed for: ${xlsxPath}`);
+      });
+    });
+  }
+
+  // Function to count the number of rows in the sheet
+  private countRows(sheet) {
+    // Use the utils from xlsx to get the sheet's JSON data (converting the sheet to JSON)
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+    return rows.length; // Return the row count
+  }
+}
+
+// Function to process each chunk of data as it is read
+async function processChunk(chunk: Buffer, XLSX) {
+  try {
+    console.info("Processing chunk...");
+    const sheets = XLSX.read(chunk, { type: "buffer" });
+    const sheetNames = sheets.SheetNames;
+    if (sheetNames.length > 0) {
+      console.info("Processed chunk successfully.");
+      return sheets.Sheets[sheetNames[0]]; // return the first sheet's data
+    }
+  } catch (err) {
+    console.error(`Error processing chunk: ${err.message}`);
+    throw new Error(`Error parsing XLSX chunk: ${err.message}`);
+  }
+}

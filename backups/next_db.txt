@@ -1,0 +1,21 @@
+db.posts.insertMany([
+  {
+    title: "M.S DHONO the untold story",
+    description: "The film chronicles the life of Dhoni from a young age through a series of life events. The idea of the biopic was put forward by Dhoni's manager, Arun Pandey, after encountering an incident at an airport after the 2011 Cricket World Cup Final. Development began two years later, with the consent of Dhoni.
+M.S. Dhoni: The Untold Story - Wikipedia
+en.wikipedia.org/wiki/M.S._Dhoni:_The_Untold_Story
+
+",
+    image: "https://www.bing.com/images/search?q=ms+dhoni+the+untold+story+simple+explanation&id=9985568914BB4A9C0B0A460D0B62070F24D7F810"
+  },
+  {
+    title: "Avatar",
+    description: "https://www.bing.com/images/search?q=ms+dhoni+the+untold+story+simple+explanation&id=9985568914BB4A9C0B0A460D0B62070F24D7F810",
+    image: "https://th.bing.com/th?id=OIP.vqaK9S-e_PEtv-ppro-towHaOG&w=298&h=298&c=10&rs=1&qlt=99&bgcl=fffffe&r=0&o=6&pid=13.1"
+  },
+  {
+    title: "The chronicles of Narnia",
+    description: "The story follows the four British Pevensie siblings, who are evacuated during the Blitz to the countryside, where they find a wardrobe that leads to the fantasy world of Narnia. There, they must ally with the lion Aslan against the forces of the White Witch, who has placed Narnia in an eternal winter.",
+    image: "https://th.bing.com/th?id=OIP.UzoPX_yW0ZcyqPeFi2doSwHaHa&w=160&h=160&rs=1&qlt=80&o=6&pid=3.1"
+  },
+)]

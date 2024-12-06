@@ -1,0 +1,428 @@
+import * as fs from "fs-extra";
+import * as xlsx from "xlsx";
+import util from "util";
+import _ from "lodash";
+import { InputToSqlMapping } from "../../datatypes/src";
+import { NotificationsServer } from "./index";
+
+const dump = (obj, depth = null) => util.inspect(obj, { depth, colors: true });
+
+const checkLength = (datum, mapping, cell) => {
+  const regex = /char\((\d+)\)/;
+  const sqlLength = parseInt(
+    regex.test(mapping.sqlType) ? regex.exec(mapping.sqlType)[1] : "0",
+  );
+  switch (true) {
+    case sqlLength === 0:
+      return;
+    case !_.isString(datum):
+      console.error(
+        `datum '${datum}' does not have a value ${dump(cell)} for mapping ${
+          dump(mapping)
+        }`,
+      );
+      return;
+    case sqlLength < datum.length:
+      console.error(
+        `datum '${datum}' length ${datum.length} won't fit in sql ${
+          dump(mapping)
+        }`,
+      );
+      return;
+    default:
+  }
+};
+
+export default class LoadXlsxData {
+  fs = fs;
+  xlsx = xlsx;
+  public bulkData: (string | number | Date)[][] = [];
+  public lotNumbers: string[] = [];
+  headers: string[] = [];
+
+  constructor(protected ns = null as (NotificationsServer | null)) {}
+
+  async scanForLotNumbers(xlsxPath: string) {
+    console.log(`called with ${xlsxPath}`);
+    this.bulkData = [];
+    const newLotNumbers = [];
+    const sheet = await this.readFirstSheet(xlsxPath);
+    let emptyRowCounter = 0;
+    let row = 1;
+
+    while (emptyRowCounter < 8) {
+      const lotNumber = this.findLotNumber(row, sheet);
+      if (_.isString(lotNumber)) {
+        newLotNumbers.push(lotNumber);
+        emptyRowCounter = 0;
+      } else {
+        emptyRowCounter += 1;
+      }
+      row++;
+    }
+    console.log(
+      `scanForLotNumbers found original ${newLotNumbers.length} records versus ${
+        _.uniq(newLotNumbers).length
+      } unique records`,
+    );
+    this.lotNumbers = newLotNumbers;
+  }
+
+  private findLotNumber(row, sheet) {
+    const cellAddress = `A${row}`;
+    const cell = sheet[cellAddress];
+    if (cell) {
+      switch (cell.t) {
+        case "n":
+          return _.toString(cell.w);
+        case "s":
+          if (!_.isEmpty(cell.w)) {
+            return cell.w;
+          }
+          break;
+        default:
+      }
+    }
+    return null;
+  }
+
+  async readWithMap(xlsxPath: string, mapping: InputToSqlMapping[]) {
+    const firstSheet = await this.readFirstSheet(xlsxPath);
+    let emptyRow = false;
+    this.loadHeaders(firstSheet);
+    let row = 2; // row 1 is the headers
+    while (!emptyRow) {
+      const dataRow: (Date | string | number)[] = [];
+      emptyRow = true;
+      mapping.forEach((c) => {
+        const cellAddress = `${c.xlsxAddress}${row}`;
+        let datum: Date | string | number = null;
+        if (firstSheet[cellAddress] !== undefined) {
+          const cellValue = firstSheet[cellAddress].w ||
+            firstSheet[cellAddress].v;
+          emptyRow = false;
+          switch (c.dataType) {
+            case "date":
+              datum = new Date(cellValue);
+              break;
+            case "number":
+              datum = parseInt(cellValue);
+              break;
+            case "string":
+              datum = cellValue;
+              checkLength(datum, c, firstSheet[cellAddress]);
+              break;
+            default:
+              datum = cellValue;
+          }
+        }
+        dataRow.push(datum);
+      });
+      if (!emptyRow) {
+        this.bulkData.push(dataRow);
+       // console.log(dataRow.length,"<<<<<<<<<<<<<<<<<<<<<<<")
+        row++;
+      }
+    }
+  }
+
+  private loadHeaders(firstSheet) {
+    let col = 0;
+    let header;
+    do {
+      header = null;
+      const cellAddress = xlsx.utils.encode_cell({ r: 0, c: col });
+      if (_.isObject(firstSheet[cellAddress])) {
+        header = firstSheet[cellAddress].w;
+        this.headers.push(header);
+      }
+      col += 1;
+    } while (header);
+  }
+
+  private async readFirstSheet(xlsxPath: string) {
+    if (this.ns) {
+      this.ns.notify("INFO", `reading IOL Report`, `reading from ${xlsxPath}`, [
+        "iolUpload",
+      ]);
+    }
+    console.info(`reading from ${xlsxPath}`);
+
+    const fs = this.fs;
+    const XLSX = this.xlsx;
+
+    const logMemoryUsage = () => {
+      const memoryUsage = process.memoryUsage();
+      console.info("Memory Usage:", {
+        rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
+        heapTotal: `${(memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
+        heapUsed: `${(memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`,
+        external: `${(memoryUsage.external / 1024 / 1024).toFixed(2)} MB`,
+      });
+    };
+
+    return new Promise((resolve, reject) => {
+      const highWaterMarkSize = 1024 * 1024 * 100; // 50 MB for highWaterMark
+
+      const stream = fs.createReadStream(xlsxPath, {
+        highWaterMark: highWaterMarkSize,
+      });
+
+      let totalSize = 0;
+      let chunks: Buffer[] = []; // to accumulate all chunks
+      let chunkCount = 0; // counter to track the number of chunks
+
+      console.info(`Starting to read file stream from: ${xlsxPath}`);
+
+      logMemoryUsage();
+
+      stream.on("data", (chunk: Buffer) => {
+        totalSize += chunk.length;
+        chunkCount += 1; // increment chunk count
+
+        console.info(
+          `Read chunk ${chunkCount}: ${chunk.length} bytes, total read so far: ${totalSize} bytes`,
+        );
+
+        logMemoryUsage();
+
+        // Push the chunk to the array instead of processing immediately
+        chunks.push(chunk);
+      });
+
+      stream.on("end", async () => {
+        try {
+          console.info(
+            `File stream reading complete. Total size: ${totalSize} bytes`,
+          );
+          logMemoryUsage();
+
+          // Once the stream is done, process all accumulated chunks
+          const sheetDataPromises = chunks.map((chunk) =>
+            processChunk(chunk, XLSX)
+          );
+
+          // Wait for all chunks to be processed before resolving
+          const allSheetData = await Promise.all(sheetDataPromises);
+
+          // Merge the sheet data (or handle it according to your needs)
+          const finalSheetData = allSheetData[0]; // assuming you only need the first sheet
+          // Count total entries (rows) in the first sheet
+          const totalEntries = Object.keys(finalSheetData).filter((key) =>
+            key.match(/^[A-Z]+\d+$/)
+          ).length;
+          console.log(`Total Entries (Rows): ${totalEntries}`);
+          resolve(finalSheetData);
+          // console.log(finalSheetData, "<<<<<<<<<<<<<DATA EXCEL");
+        } catch (err) {
+          reject(new Error(`Error processing chunks: ${err.message}`));
+        }
+      });
+
+      stream.on("error", (err: Error) => {
+        console.error(`Error reading file stream: ${err.message}`);
+        reject(
+          new Error(`"${xlsxPath}" could not be read because ${err.message}`),
+        );
+      });
+
+      stream.on("close", () => {
+        console.info(`File stream closed for: ${xlsxPath}`);
+      });
+    });
+  }
+}
+
+// Function to process each chunk of data as it is read
+async function processChunk(chunk: Buffer, XLSX) {
+  try {
+    console.info("Processing chunk...");
+    const sheets = XLSX.read(chunk, { type: "buffer" });
+    const sheetNames = sheets.SheetNames;
+    if (sheetNames.length > 0) {
+      console.info("Processed chunk successfully.");
+      return sheets.Sheets[sheetNames[0]]; // return the first sheet's data
+    }
+  } catch (err) {
+    console.error(`Error processing chunk: ${err.message}`);
+    throw new Error(`Error parsing XLSX chunk: ${err.message}`);
+  }
+}
+
+////////// original code
+
+// import * as fs from "fs-extra";
+// import * as xlsx from "xlsx";
+// import util from "util";
+// import _ from "lodash";
+// import { InputToSqlMapping } from "../../datatypes/src";
+// import { NotificationsServer } from "./index";
+// const dump = (obj, depth = null) => util.inspect(obj, { depth, colors: true });
+
+// const checkLength = (datum, mapping, cell) => {
+//   const regex = /char\((\d+)\)/;
+//   const sqlLength = parseInt(
+//     regex.test(mapping.sqlType) ? regex.exec(mapping.sqlType)[1] : "0",
+//   );
+//   switch (true) {
+//     case sqlLength === 0:
+//       return;
+//     case !_.isString(datum):
+//       console.error(
+//         `datum '${datum}' does not have a value ${dump(cell)} for mapping ${
+//           dump(mapping)
+//         }`,
+//       );
+//       return;
+//     case sqlLength < datum.length:
+//       console.error(
+//         `datum '${datum}' length ${datum.length} won't fit in sql ${
+//           dump(mapping)
+//         }`,
+//       );
+//       return;
+//     default:
+//   }
+// };
+
+// export default class LoadXlsxData {
+//   fs = fs;
+//   xlsx = xlsx;
+//   public bulkData: (string | number | Date)[][];
+//   public lotNumbers: string[];
+//   headers: string[];
+
+//   constructor(protected ns = null as (NotificationsServer | null)) {
+//     this.bulkData = [];
+//     this.headers = [];
+//   }
+
+//   async scanForLotNumbers(xlsxPath: string) {
+//     console.log(`called with ${xlsxPath}`);
+//     this.bulkData = [];
+//     const newLotNumbers = [];
+//     const sheet = await this.readFirstSheet(xlsxPath);
+//     let emptyRowCounter = 0;
+//     let row = 1;
+
+//     while (emptyRowCounter < 8) {
+//       const lotNumber = this.findLotNumber(row, sheet);
+//       // console.log(`read sheet row ${row} found ${lotNumber}`);
+//       if (_.isString(lotNumber)) {
+//         newLotNumbers.push(lotNumber);
+//         emptyRowCounter = 0;
+//       } else {
+//         emptyRowCounter += 1;
+//       }
+//       row++;
+//     }
+//     console.log(
+//       `scanForLotNumbers found original ${newLotNumbers.length} records versus ${
+//         _.uniq(newLotNumbers).length
+//       } unique records`,
+//     );
+//     this.lotNumbers = newLotNumbers;
+//   }
+
+//   private findLotNumber(row, sheet) {
+//     const cellAddress = `A${row}`;
+//     const cell = sheet[cellAddress];
+//     if (cell) {
+//       // console.log(`cell contents ${dump(cell)}`);
+//       switch (cell.t) {
+//         case "n":
+//           return _.toString(cell.w);
+//         case "s":
+//           if (!_.isEmpty(cell.w)) {
+//             return cell.w;
+//           }
+//           break;
+//         default:
+//       }
+//     }
+//     return null;
+//   }
+
+//   async readWithMap(xlsxPath: string, mapping: InputToSqlMapping[]) {
+//     const firstSheet = await this.readFirstSheet(xlsxPath);
+//     let emptyRow = false;
+//     this.loadHeaders(firstSheet);
+//     let row = 2; //row 1 is the headers
+//     // console.log(`reading with mapping ${dump(mapping)} from ${xlsxPath}`)
+//     // console.log(`and received ${dump(firstSheet)}`)
+//     while (!emptyRow) {
+//       const dataRow: (Date | string | number)[] = [];
+//       emptyRow = true;
+//       mapping.forEach((c) => {
+//         const cellAddress = `${c.xlsxAddress}${row}`;
+//         let datum: Date | string | number = null;
+//         if (firstSheet[cellAddress] !== undefined) {
+//           const cellValue = firstSheet[cellAddress].w ||
+//             firstSheet[cellAddress].v;
+//           emptyRow = false;
+//           switch (c.dataType) {
+//             case "date":
+//               datum = new Date(cellValue);
+//               break;
+//             case "number":
+//               datum = parseInt(cellValue);
+//               break;
+//             case "string":
+//               datum = cellValue;
+//               checkLength(datum, c, firstSheet[cellAddress]);
+//               break;
+//             default:
+//               datum = cellValue;
+//           }
+//         }
+//         // console.log(`datum ${datum} row
+//         // is ${emptyRow ? '' : ' not'} empty
+//         // from ${dump(firstSheet[cellAddress])}`);
+
+//         dataRow.push(datum);
+//       });
+//       if (!emptyRow) {
+//         this.bulkData.push(dataRow);
+//         row++;
+//       }
+//     }
+//   }
+
+//   private loadHeaders(firstSheet) {
+//     let col = 0;
+//     let header;
+//     do {
+//       header = null;
+//       const cellAddress = xlsx.utils.encode_cell({ r: 0, c: col });
+//       // console.log(`header cell ${dump(firstSheet[cellAddress])}`)
+//       if (_.isObject(firstSheet[cellAddress])) {
+//         header = firstSheet[cellAddress].w;
+//         // console.log(`header for cell ${cellAddress} column ${col} is ${dump(header)}`)
+//         this.headers.push(header);
+//       }
+//       col += 1;
+//     } while (header);
+//   }
+//   private async readFirstSheet(xlsxPath: string) {
+//     if (this.ns) {
+//       this.ns.notify("INFO", `reading IOL Report`, `reading from ${xlsxPath}`, [
+//         "iolUpload",
+//       ]);
+//     }
+//     console.info(`reading from ${xlsxPath}`);
+//     const buffer = await this.fs.readFile(xlsxPath)
+//       .catch((err) => {
+//         throw new Error(`"${xlsxPath}" could not be read because ${err}`);
+//       });
+//     const sheets = this.xlsx.read(buffer, { type: "buffer" });
+//     // console.log(`read sheets ${dump(sheets)}`);
+//     return sheets.Sheets[sheets.SheetNames[0]];
+//     // // Calculate the total number of rows (entries) in the first sheet
+//     // const firstSheet = sheets.Sheets[sheets.SheetNames[0]];
+//     // const totalEntries =
+//     //   Object.keys(firstSheet).filter((key) => key.match(/^[A-Z]+\d+$/) // Match cell references like A1, B2, etc.
+//     //   ).length;
+
+//     // console.log(`Total Entries (Rows): ${totalEntries}`);
+//   }
+// }

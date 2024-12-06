@@ -1,0 +1,56 @@
+It seems like you've already created the `.bat` file and placed it in the Startup folder, which is almost there! However, just placing the `.bat` file directly in the Startup folder won't automatically execute it on startup — you need to create a **shortcut** to that `.bat` file inside the Startup folder.
+
+Here's what you need to do next to make it work:
+
+### Steps to Add the `.bat` File as a Shortcut in the Startup Folder
+
+1. **Navigate to the Startup Folder**:
+   - Press `Win + R`, type `shell:startup`, and press Enter. This will open the **Startup folder**.
+
+2. **Create a Shortcut to the `.bat` File**:
+   - **Do not move the `.bat` file** directly into this folder. Instead, you need to create a shortcut.
+   - Right-click on your `.bat` file (e.g., `start-pm2.bat`) that you saved in the folder `D:\NoAccess-Backup(Shyam.M)\watcher`.
+   - Select **Create shortcut**.
+   - A shortcut will be created in the same folder.
+
+3. **Move the Shortcut to the Startup Folder**:
+   - Now, move (or copy) the **shortcut** (not the `.bat` file itself) into the **Startup folder** you opened earlier.
+   
+   This will make sure that when Windows starts, the batch script runs automatically.
+
+### Verify and Test:
+
+1. **Restart Your Computer**:
+   - Restart your PC to test if the script runs automatically when the system boots up.
+
+2. **Check PM2 Process**:
+   - After your PC starts, open Command Prompt or PowerShell, and run:
+     ```bash
+     pm2 list
+     ```
+     This will show if your `bun --dev` process is running.
+
+### Optional: Add Logging for Troubleshooting
+If you want to make sure the script is running properly, you can add a log to the `.bat` file to capture any errors or output.
+
+Modify the `.bat` file to include logging like this:
+
+```batch
+@echo off
+cd /d "D:\NoAccess-Backup(Shyam.M)\watcher"
+pm2 start bun --dev >> "D:\NoAccess-Backup(Shyam.M)\watcher\pm2-start-log.txt" 2>&1
+```
+
+This will create a `pm2-start-log.txt` file in your `watcher` directory, where you can see the output of the `pm2` command (including errors).
+
+---
+
+### In Summary:
+- Make sure you're placing the **shortcut** to the `.bat` file in the Startup folder, not the `.bat` file itself.
+- After adding the shortcut, restart your computer to check if the batch file runs automatically.
+- Optionally, add logging to check for errors or output.
+
+Let me know how it goes or if you need more help!
+
+
+///

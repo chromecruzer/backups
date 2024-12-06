@@ -1,0 +1,487 @@
+FINAL BLAZE
+
+//////////////////////////////
+
+import multer from 'multer';
+import path from "path";
+import { StatusCodes } from "http-status-codes";
+import createHttpError = require("http-errors");
+import { DateTime } from "luxon";
+import _ from "lodash";
+import {
+  AuditRecord, Comparisons,
+  InputToSqlMapping,
+  uploadHeaders,
+  UploadSupportedFileTypes
+} from "@trac/datatypes";
+import { LoadXlsxData, NotificationsServer, PostgresClient, tryCatch } from "@trac/postgresql";
+import UploadManager from "../datastore/UploadManager";
+
+import util from "util";
+import { UploadAnalysisA } from "./UploadAnalysisA";
+import { UploadTransformerA } from "./UploadTransformerA";
+import { UploadCommitA } from "./UploadCommitA";
+
+const dump = (obj, depth = null) => util.inspect(obj, { depth, colors: true });
+
+export type UploadResultsType = ((Comparisons | AuditRecord) | null);
+const tokenHeader = uploadHeaders.tokenHeader;
+const xlsxFilter = (req, file, callback) => {
+  if (path.extname(file.originalname) === '.xlsx' || path.extname(file.originalname) === '.csv') {
+    // console.log(`checking xlsx file ${dump(file)}`);
+    callback(null, true);
+    return;
+  }
+  callback(new multer.MulterError('LIMIT_UNEXPECTED_FILE', `${file.originalname} is not a spreadsheet file ${path.extname(file.originalname)}`));
+}
+
+export class UploadWizardProvider {
+  protected uploader;
+  protected fileLoader: LoadXlsxData;
+
+
+  constructor(public uploadManager: UploadManager, protected type: UploadSupportedFileTypes,
+    protected transformer: UploadTransformerA, protected committer: UploadCommitA,
+    protected dataAnalysis: UploadAnalysisA,
+    protected ns = null as (NotificationsServer | null)) {
+    this.uploader = multer({
+      storage: multer.diskStorage({
+        destination: this.fileDestination.bind(this),
+        filename: this.fileName.bind(this),
+      }),
+      fileFilter: xlsxFilter
+    });
+    this.fileLoader = new LoadXlsxData(ns);
+  }
+
+  // upload(postgresClient: PostgresClient, mapping: InputToSqlMapping[] = null) {
+  //   return tryCatch(async (req, res, next) => {
+  //     // console.log(`request with file ${dump(req)}`);
+  //     const uploadedFile = req.file;
+  //     const user = req.body[uploadHeaders.userField];
+  //     if (this.ns) {
+  //       this.ns.started(['iolUpload']);
+  //     }
+  //     // console.log(`uploaded file ${uploadedFile} with form ${dump(req.body)}`);
+  //     const token = await this.uploadManager.addSession(uploadedFile.path,
+  //       user, this.type, req.body);
+  //     console.log(` token ${token} file path ${uploadedFile.path} type ${this.type}`)
+  //     let uploadedData;
+  //     if (mapping) {
+  //       await this.fileLoader.readLargeCsv(uploadedFile.path);
+  //       uploadedData = this.fileLoader.bulkData;
+  //       console.log(uploadedData, "FINAL READ")
+  //     } else {
+  //       await this.fileLoader.scanForLotNumbers(uploadedFile.path);
+  //       uploadedData = this.fileLoader.lotNumbers;
+  //     }
+  //     // console.log(`file contents ${this.fileLoader.bulkData}`);
+  //     const client = await postgresClient.getClient();
+  //     await this.transformer.transform(uploadedData,
+  //       client, token, req.body);
+  //     const analytics = await this.dataAnalysis.comparisons(token);
+  //     await postgresClient.release(client);
+  //     if (this.ns) {
+  //       this.ns.completed(['iolUpload']);
+  //     }
+  //     res.setHeader(tokenHeader, token);
+  //     res.json(analytics);
+  //   })
+  // }
+
+  // final
+
+  upload(postgresClient: PostgresClient, mapping: InputToSqlMapping[] = null) {
+    return tryCatch(async (req, res, next) => {
+      const uploadedFile = req.file;
+      const user = req.body[uploadHeaders.userField];
+      if (this.ns) {
+        this.ns.started(['iolUpload']);
+      }
+
+      const token = await this.uploadManager.addSession(uploadedFile.path, user, this.type, req.body);
+      console.log(`token ${token} file path ${uploadedFile.path} type ${this.type}`);
+
+      let uploadedData;
+
+      // Handle cases based on the presence of mapping and file type
+      if (mapping) {
+        // If mapping exists, handle file loading accordingly
+        if (this.type === 'customer_contact_data') {
+          await this.fileLoader.readWithMap(uploadedFile.path, mapping);  // Specific handling for 'customer_contact_data'
+          uploadedData = this.fileLoader.bulkData;
+          console.log(uploadedData, "FINAL READ");
+        } else {
+          await this.fileLoader.readLargeCsv(uploadedFile.path);  // Default CSV reading
+          uploadedData = this.fileLoader.bulkData;
+          console.log(uploadedData, "FINAL READ");
+        }
+      } else {
+        // If no mapping, scan for lot numbers (default behavior)
+        await this.fileLoader.scanForLotNumbers(uploadedFile.path);
+        uploadedData = this.fileLoader.lotNumbers;
+      }
+
+      const client = await postgresClient.getClient();
+      await this.transformer.transform(uploadedData, client, token, req.body);
+
+      const analytics = await this.dataAnalysis.comparisons(token);
+      await postgresClient.release(client);
+
+      if (this.ns) {
+        this.ns.completed(['iolUpload']);
+      }
+
+      res.setHeader(tokenHeader, token);
+      res.json(analytics);
+    });
+  }
+
+
+  protected fileDestination(req, file, callback) {// need the unused parameters for multer
+    const dest = path.join(this.uploadManager.uploadPath, this.type);
+    // console.log(`destination path is ${dest}`);
+    callback(null, dest)
+  }
+
+  protected fileName(req, file, callback) {// need the unused parameters for multer
+    const name = `${this.type}_${DateTime.now().toFormat('yyyy_MM_dd_hh_mm_ss')}.${_.endsWith(file.originalname,
+      '.csv') ? 'csv' : 'xlsx'}`;
+    // console.log(`destination filename is ${name} ${dump(file)}`);
+    callback(null, name);
+  }
+
+  configuredMiddleware() {
+    return this.uploader.single(uploadHeaders.fileField);
+  }
+
+  comparisons() {
+    return tryCatch(async (req, res, next) => {
+      const token = req.header(tokenHeader);
+      // console.log(`token ${token} from ${dump(req.headers)}`)
+      const result = _.isString(token) ? await this.dataAnalysis.comparisons(token) : null;
+      if (result) {
+        res.setHeader(tokenHeader, token);
+        res.json(result);
+      } else {
+        const error = new Error(`need a session in the header ${uploadHeaders.tokenHeader} for token ${token}`);
+        const httpError = createHttpError(400, error);
+        next(httpError);
+      }
+    })
+  }
+
+  // commit(postgresClient: PostgresClient) {
+  //   // console.log('setting up commit');
+  //   return tryCatch(async (req, res, next) => {
+  //     const token = req.header(tokenHeader);
+  //     // console.log(`commit started ${token}`);
+  //     const client = await postgresClient.getClient();
+  //     await this.committer.commit(token, client);
+  //     // console.log('data committed');
+  //     await postgresClient.release(client);
+  //     // console.log('release client')
+  //     await this.uploadManager.archiveSession(token)
+  //       .catch(err => console.error(`archiver error ${dump(err)}`));
+  //     // console.log('setting status to ok');
+  //     res.status(StatusCodes.OK);
+  //     res.send('OK')
+  //   })
+  // }
+
+  // cancel() {
+  //   return tryCatch(async (req, res) => {
+  //     const token = req.header(tokenHeader);
+  //     await this.uploadManager.removeSession(token, true);
+  //     res.status(StatusCodes.OK);
+  //     res.send('OK')
+  //   })
+  // }
+
+  commit(postgresClient: PostgresClient) {
+    // console.log('setting up commit');
+    return tryCatch(async (req, res, next) => {
+      const token = req.header(tokenHeader);
+      // console.log(`commit started ${token}`);
+      const client = await postgresClient.getClient();
+      await this.committer.commit(token, client);
+      // console.log('data committed');
+      await postgresClient.release(client);
+      // console.log('release client')
+
+      // Clear the uploaded data in memory after commit
+      this.fileLoader.bulkData = [];
+      console.info("Memory cleared after commit");
+
+      await this.uploadManager.archiveSession(token)
+        .catch(err => console.error(`archiver error ${dump(err)}`));
+      // console.log('setting status to ok');
+      res.status(StatusCodes.OK);
+      res.send('OK')
+    });
+  }
+
+  cancel() {
+    return tryCatch(async (req, res) => {
+      const token = req.header(tokenHeader);
+      await this.uploadManager.removeSession(token, true);
+
+      // Clear the uploaded data in memory after cancel
+      this.fileLoader.bulkData = [];
+      console.info("Memory cleared after cancel");
+
+      res.status(StatusCodes.OK);
+      res.send('OK')
+    });
+  }
+
+}
+
+
+//////////////////////////////////////////////////////
+
+
+import * as fs from "fs-extra";
+import * as xlsx from "xlsx";
+import csv from "csv-parser"; // You may need this for reading CSV files
+import util from "util";
+import _ from "lodash";
+import { InputToSqlMapping } from "../../datatypes/src";
+import { NotificationsServer } from "./index";
+const dump = (obj, depth = null) => util.inspect(obj, { depth, colors: true });
+
+const checkLength = (datum, mapping, cell) => {
+  const regex = /char\((\d+)\)/;
+  const sqlLength = parseInt(regex.test(mapping.sqlType) ? regex.exec(mapping.sqlType)[1] : '0');
+  switch (true) {
+    case sqlLength === 0:
+      return;
+    case !_.isString(datum):
+      console.error(`datum '${datum}' does not have a value ${dump(cell)} for mapping ${dump(mapping)}`);
+      return;
+    case sqlLength < datum.length:
+      console.error(`datum '${datum}' length ${datum.length} won't fit in sql ${dump(mapping)}`);
+      return;
+    default:
+  }
+}
+
+export default class LoadXlsxData {
+  fs = fs;
+  xlsx = xlsx;
+  public bulkData: (string | number | Date)[][];
+  public lotNumbers: string[];
+  headers: string[];
+
+  constructor(protected ns = null as (NotificationsServer | null)) {
+    this.bulkData = [];
+    this.headers = [];
+  }
+
+  async scanForLotNumbers(xlsxPath: string) {
+    console.log(`called with ${xlsxPath}`);
+    this.bulkData = [];
+    const newLotNumbers = [];
+    const sheet = await this.readFirstSheet(xlsxPath);
+    let emptyRowCounter = 0;
+    let row = 1;
+
+    while (emptyRowCounter < 8) {
+      const lotNumber = this.findLotNumber(row, sheet);
+      // console.log(`read sheet row ${row} found ${lotNumber}`);
+      if (_.isString(lotNumber)) {
+        newLotNumbers.push(lotNumber);
+        emptyRowCounter = 0;
+      } else {
+        emptyRowCounter += 1;
+      }
+      row++;
+    }
+    console.log(`scanForLotNumbers found original ${newLotNumbers.length} records versus ${_.uniq(newLotNumbers).length} unique records`)
+    this.lotNumbers = newLotNumbers;
+  }
+
+  private findLotNumber(row, sheet) {
+    const cellAddress = `A${row}`;
+    const cell = sheet[cellAddress];
+    if (cell) {
+      // console.log(`cell contents ${dump(cell)}`);
+      switch (cell.t) {
+        case 'n':
+          return _.toString(cell.w);
+        case 's':
+          if (!_.isEmpty(cell.w)) {
+            return cell.w;
+          }
+          break;
+        default:
+      }
+    }
+    return null;
+  }
+
+  async readWithMap(xlsxPath: string, mapping: InputToSqlMapping[]) {
+    const firstSheet = await this.readFirstSheet(xlsxPath);
+    let emptyRow = false;
+    this.loadHeaders(firstSheet);
+    let row = 2; //row 1 is the headers
+    // console.log(`reading with mapping ${dump(mapping)} from ${xlsxPath}`)
+    // console.log(`and received ${dump(firstSheet)}`)
+    while (!emptyRow) {
+      const dataRow: (Date | string | number)[] = [];
+      emptyRow = true;
+      mapping.forEach(c => {
+        const cellAddress = `${c.xlsxAddress}${row}`;
+        let datum: (Date | string | number) = null;
+        if (firstSheet[cellAddress] !== undefined) {
+          const cellValue = firstSheet[cellAddress].w || firstSheet[cellAddress].v;
+          emptyRow = false;
+          switch (c.dataType) {
+            case 'date':
+              datum = new Date(cellValue);
+              break;
+            case 'number':
+              datum = parseInt(cellValue);
+              break;
+            case 'string':
+              datum = cellValue;
+              checkLength(datum, c, firstSheet[cellAddress]);
+              break;
+            default:
+              datum = cellValue;
+          }
+        }
+        // console.log(`datum ${datum} row
+        // is ${emptyRow ? '' : ' not'} empty
+        // from ${dump(firstSheet[cellAddress])}`);
+
+        dataRow.push(datum);
+      });
+      if (!emptyRow) {
+        this.bulkData.push(dataRow);
+        row++;
+      }
+    }
+  }
+
+  private loadHeaders(firstSheet) {
+    let col = 0;
+    let header;
+    do {
+      header = null;
+      const cellAddress = xlsx.utils.encode_cell({ r: 0, c: col });
+      // console.log(`header cell ${dump(firstSheet[cellAddress])}`)
+      if (_.isObject(firstSheet[cellAddress])) {
+        header = firstSheet[cellAddress].w;
+        // console.log(`header for cell ${cellAddress} column ${col} is ${dump(header)}`)
+        this.headers.push(header);
+      }
+      col += 1;
+    } while (header);
+  }
+  private async readFirstSheet(xlsxPath: string) {
+    if (this.ns) {
+      this.ns.notify('INFO', `reading IOL Report`,
+        `reading from ${xlsxPath}`, ['iolUpload'])
+    }
+    console.info(`reading from ${xlsxPath}`);
+    const buffer = await this.fs.readFile(xlsxPath)
+      .catch(err => {
+        throw new Error(`"${xlsxPath}" could not be read because ${err}`)
+      });
+    const sheets = this.xlsx.read(buffer, { type: 'buffer' });
+    // console.log(`read sheets ${dump(sheets)}`);
+    return sheets.Sheets[sheets.SheetNames[0]];
+  }
+
+
+  async readLargeCsv(csvPath: string): Promise<any[]> {
+    // return new Promise((resolve, reject) => {
+    //   const results: any[] = [];
+
+    //   fs.createReadStream(csvPath)
+    //     .pipe(csv())
+    //     .on("data", (data) => {
+    //       // Utility function to safely convert a date string to ISO format, if valid
+    //       function parseDate(dateStr: string): string {
+    //         const parsedDate = new Date(dateStr);
+    //         // If the date is invalid, return the original date string
+    //         return isNaN(parsedDate.getTime()) ? dateStr : parsedDate.toISOString();
+    //       }
+
+    //       // Convert the object to an array of values and handle dates
+    //       const convertedData = [
+    //         data["W/H          "].trim(),  // W/H
+    //         data["LOCN."].trim(),          // LOCN.
+    //         data["NAME"].trim(),           // NAME
+    //         data["ADDRESS/PHONE"].trim(),  // ADDRESS/PHONE
+    //         data["ITEM"].trim(),           // ITEM
+    //         data["DESCRIPTION"].trim(),    // DESCRIPTION
+    //         data["LOT"].trim(),            // LOT
+    //         parseInt(data["QTY"]),         // QTY (convert to number)
+    //         data["PURCHASE ORDER"].trim(), // PURCHASE ORDER
+    //         parseDate(data["RECD. DATE"]), // RECD. DATE
+    //         parseDate(data["EXP. DATE"]),  // EXP. DATE
+    //         parseDate(data["SHIP DATE"]), // SHIP DATE
+    //       ];
+
+    //       results.push(convertedData); // Push the formatted array
+    //     })
+    //     .on("end", () => {
+    //       console.log("Results:", results); // Log results
+    //       resolve(results); // Resolve the promise with results
+    //     })
+    //     .on("error", (err) => {
+    //       reject(new Error(`"${csvPath}" could not be read because ${err}`));
+    //     });
+    // });
+
+    // working perfectly...
+    return new Promise((resolve, reject) => {
+      if (this.ns) {
+        this.ns.notify('INFO', `reading IOL Report 📊 Please Wait... `,
+          `FROM ${csvPath} ✅`, ['iolUpload'])
+      }
+      // You can keep results here if you still need to log them or for debugging purposes
+      //const results: any[] = [];
+
+      fs.createReadStream(csvPath)
+        .pipe(csv())
+        .on("data", (data) => {
+          // Utility function to safely convert a date string to ISO format, if valid
+          function parseDate(dateStr: string): string {
+            const parsedDate = new Date(dateStr);
+            // If the date is invalid, return the original date string
+            return isNaN(parsedDate.getTime()) ? dateStr : parsedDate.toISOString();
+          }
+
+          // Convert the object to an array of values and handle dates
+          const convertedData = [
+            data["W/H          "].trim(),  // W/H
+            data["LOCN."].trim(),          // LOCN.
+            data["NAME"].trim(),           // NAME
+            data["ADDRESS/PHONE"].trim(),  // ADDRESS/PHONE
+            data["ITEM"].trim(),           // ITEM
+            data["DESCRIPTION"].trim(),    // DESCRIPTION
+            data["LOT"].trim(),            // LOT
+            parseInt(data["QTY"]),         // QTY (convert to number)
+            data["PURCHASE ORDER"].trim(), // PURCHASE ORDER
+            parseDate(data["RECD. DATE"]), // RECD. DATE
+            parseDate(data["EXP. DATE"]),  // EXP. DATE
+            parseDate(data["SHIP DATE"]), // SHIP DATE
+          ];
+
+          // Instead of pushing to 'results', push directly to 'bulkData'
+          this.bulkData.push(convertedData); // Push directly to bulkData
+        })
+        .on("end", () => {
+          console.log("Bulk Data:", this.bulkData); // Log bulkData if needed
+          resolve(this.bulkData); // Resolve the promise with the bulkData
+        })
+        .on("error", (err) => {
+          reject(new Error(`"${csvPath}" could not be read because ${err}`));
+        });
+    });
+  }
+}
+

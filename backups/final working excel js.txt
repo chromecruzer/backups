@@ -1,0 +1,237 @@
+
+// import * as fs from "fs-extra";
+// import * as xlsx from "xlsx";
+// import util from "util";
+// import * as ExcelJS from 'exceljs';
+// import _ from "lodash";
+// import { InputToSqlMapping } from "../../datatypes/src";
+// import { NotificationsServer } from "./index";
+// const dump = (obj, depth = null) => util.inspect(obj, { depth, colors: true });
+
+// const checkLength = (datum, mapping, cell) => {
+//   const regex = /char\((\d+)\)/;
+//   const sqlLength = parseInt(regex.test(mapping.sqlType) ? regex.exec(mapping.sqlType)[1] : '0');
+//   switch (true) {
+//     case sqlLength === 0:
+//       return;
+//     case !_.isString(datum):
+//       console.error(`datum '${datum}' does not have a value ${dump(cell)} for mapping ${dump(mapping)}`);
+//       return;
+//     case sqlLength < datum.length:
+//       console.error(`datum '${datum}' length ${datum.length} won't fit in sql ${dump(mapping)}`);
+//       return;
+//     default:
+//   }
+// }
+
+// export default class LoadXlsxData {
+//   fs = fs;
+//   xlsx = xlsx;
+//   public bulkData: (string | number | Date)[][];
+//   public lotNumbers: string[];
+//   headers: string[];
+
+//   constructor(protected ns = null as (NotificationsServer | null)) {
+//     this.bulkData = [];
+//     this.headers = [];
+//   }
+
+//   async scanForLotNumbers(xlsxPath: string) {
+//     console.log(`called with ${xlsxPath}`);
+//     this.bulkData = [];
+//     const newLotNumbers = [];
+//     const sheet = await this.readFirstSheet(xlsxPath);
+//     let emptyRowCounter = 0;
+//     let row = 1;
+
+//     while (emptyRowCounter < 8) {
+//       const lotNumber = this.findLotNumber(row, sheet);
+//       if (_.isString(lotNumber)) {
+//         newLotNumbers.push(lotNumber);
+//         emptyRowCounter = 0;
+//       } else {
+//         emptyRowCounter += 1;
+//       }
+//       row++;
+//     }
+//     console.log(`scanForLotNumbers found original ${newLotNumbers.length} records versus ${_.uniq(newLotNumbers).length} unique records`);
+//     this.lotNumbers = newLotNumbers;
+//   }
+
+//   private findLotNumber(row, sheet) {
+//     const cellAddress = `A${row}`;
+//     const cell = sheet[cellAddress];
+//     if (cell) {
+//       switch (cell.t) {
+//         case 'n':
+//           return _.toString(cell.w);
+//         case 's':
+//           if (!_.isEmpty(cell.w)) {
+//             return cell.w;
+//           }
+//           break;
+//         default:
+//       }
+//     }
+//     return null;
+//   }
+
+//   async readWithMap(xlsxPath: string, mapping: InputToSqlMapping[]) {
+//     const firstSheet = await this.readFirstSheet(xlsxPath);
+//     let emptyRow = false;
+//     this.loadHeaders(firstSheet);
+//     let row = 2; //row 1 is the headers
+//     while (!emptyRow) {
+//       const dataRow: (Date | string | number)[] = [];
+//       emptyRow = true;
+//       mapping.forEach(c => {
+//         const cellAddress = `${c.xlsxAddress}${row}`;
+//         let datum: (Date | string | number) = null;
+//         if (firstSheet[cellAddress] !== undefined) {
+//           const cellValue = firstSheet[cellAddress].w || firstSheet[cellAddress].v;
+//           emptyRow = false;
+//           switch (c.dataType) {
+//             case 'date':
+//               datum = new Date(cellValue);
+//               break;
+//             case 'number':
+//               datum = parseInt(cellValue);
+//               break;
+//             case 'string':
+//               datum = cellValue;
+//               checkLength(datum, c, firstSheet[cellAddress]);
+//               break;
+//             default:
+//               datum = cellValue;
+//           }
+//         }
+//         dataRow.push(datum);
+//       });
+//       if (!emptyRow) {
+//         this.bulkData.push(dataRow);
+//         row++;
+//       }
+//     }
+//   }
+
+//   private loadHeaders(firstSheet) {
+//     let col = 0;
+//     let header;
+//     do {
+//       header = null;
+//       const cellAddress = xlsx.utils.encode_cell({ r: 0, c: col });
+//       if (_.isObject(firstSheet[cellAddress])) {
+//         header = firstSheet[cellAddress].w;
+//         this.headers.push(header);
+//       }
+//       col += 1;
+//     } while (header);
+//   }
+
+//   private async readFirstSheet(xlsxPath: string): Promise<any> {
+//     if (this.ns) {
+//       this.ns.notify('INFO', `reading IOL Report`, `reading from ${xlsxPath}`, ['iolUpload']);
+//     }
+//     console.info(`Reading from ${xlsxPath}`);
+  
+//     const workbook = new ExcelJS.stream.xlsx.WorkbookReader(xlsxPath, {
+//       entries: 'emit',
+//       sharedStrings: 'cache',
+//       styles: 'cache',
+//     });
+//     const sheetData: any = {};
+//     let totalRows = 0;
+//     let totalColumns = 0;
+  
+//     console.log('Starting to process sheet data using streaming...');
+  
+//     try {
+//       for await (const worksheet of workbook) {
+//         console.log(`Processing worksheet: ${worksheet.name}`);
+  
+//         for await (const row of worksheet) {
+//           totalRows++;
+  
+//           try {
+//             row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+//               try {
+//                 totalColumns = Math.max(totalColumns, colNumber);
+//                 const cellKey = `${String.fromCharCode(64 + colNumber)}${totalRows}`;
+//                 const cellValue = cell.value;
+  
+//                 // Handling Date cells
+//                 if (cellValue instanceof Date) {
+//                   const formattedDate = this.formatDate(cellValue.toString());
+//                   sheetData[cellKey] = {
+//                     t: 's',   // Type for string representation
+//                     v: formattedDate,
+//                     r: `<t>${formattedDate}</t>`,
+//                     h: formattedDate,
+//                     w: formattedDate,
+//                   };
+//                 } else {
+//                   // Handling other types (strings, numbers, etc.)
+//                   sheetData[cellKey] = {
+//                     t: cell.type === ExcelJS.ValueType.String ? 's' :
+//                        (cell.type === ExcelJS.ValueType.Number ? 'n' : 's'), // 'n' for number, 's' for string
+//                     v: cell.value,
+//                     r: `<t>${cell.text || ''}</t>`,  // Raw text value
+//                     h: cell.text || '',             // Html content for the cell
+//                     w: cell.value?.toString() || '', // Displayed value (string)
+//                   };
+//                 }
+//               } catch (cellError) {
+//                 console.error(`Error processing cell at Row ${totalRows}, Col ${colNumber}:`, cellError);
+//               }
+//             });
+//           } catch (rowError) {
+//             console.error(`Error processing Row ${totalRows}:`, rowError);
+//           }
+  
+//           // Batch processing every 10,000 rows
+//           if (totalRows % 10000 === 0) {
+//             console.log(`Processed ${totalRows} rows...`);
+//             await new Promise((resolve) => setImmediate(resolve));
+//           }
+//         }
+  
+//         break; // Process only the first worksheet
+//       }
+//     } catch (workbookError) {
+//       console.error('Error reading workbook:', workbookError);
+//       throw workbookError;
+//     }
+  
+//     console.log(`Finished processing sheet. Total Rows: ${totalRows}, Total Columns: ${totalColumns}`);
+  
+//     const ref = `A1:${String.fromCharCode(64 + totalColumns)}${totalRows}`; // Reference for the entire sheet range
+  
+//     // Construct the result with necessary metadata and sheet data
+//     const result = {
+//       '!ref': ref,
+//       '!margins': {
+//         left: 0.7,
+//         right: 0.7,
+//         top: 0.75,
+//         bottom: 0.75,
+//         header: 0.3,
+//         footer: 0.3,
+//       },
+//       ...sheetData,  // Spread the sheet data
+//     };
+  
+//     return result;
+//   }
+//   // Helper function to format dates
+//   private formatDate(date: string): string {
+//     const jsDate = new Date(date);
+//     const formattedDate = jsDate.toISOString();
+//     return formattedDate.slice(0, 19).replace('T', ' ');
+//   }
+// }
+
+
+// // excel js 
+
+
+
