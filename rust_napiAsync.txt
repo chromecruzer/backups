@@ -111,7 +111,7 @@ async fn read_file_async(path: String) -> Result<Buffer> {
 
 
 
-
+index.d.ts
 /////////////////////
 /* tslint:disable */
 /* eslint-disable */
@@ -122,3 +122,29 @@ import Buffer from "buffer"
 
 export declare function asyncPlus100(p: Promise<number>): Promise<number>
 export declare function readFileAsync(path: string): Promise<Buffer>
+
+
+
+/////////////////// cargo.toml
+[package]
+edition = "2021"
+name = "my-plugin_rustacean"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Default enable napi4 feature, see https://nodejs.org/api/n-api.html#node-api-version-matrix
+napi = { version = "2.12.2", default-features = false, features = ["napi4", "tokio_rt"] }
+tokio = { version = "1.42.0", features = ["fs", "full"] }
+csv = "1.1"
+napi-derive = "2.16.13"
+futures = "0.3"
+
+[build-dependencies]
+napi-build = "2.0.1"
+
+[profile.release]
+lto = true
+strip = "symbols"
